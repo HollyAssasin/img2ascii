@@ -18,10 +18,12 @@ will be much more defined using edge characters.
 - [x] Edge detection
 - [x] Add GUI
 - [ ] Add more options to GUI
-    - [x] Image Upscaling
+    - [x] Image Up scaling
     - [ ] Smarter quantization
-    - [x] Change font
-    - [ ] Different charset
+    - [ ] Change font
+    - [x] Different charset
+- [ ] Overhaul the GUI
+- [ ] Implement multithreading
 - [ ] Create Web App
 
 

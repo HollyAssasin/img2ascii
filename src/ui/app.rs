@@ -12,6 +12,7 @@ use crate::filters;
 pub struct AsciiApp {
     pub picked_path: Option<PathBuf>,
     pub orig_img: image::DynamicImage,
+    pub font: PathBuf,
     pub toasts: Toasts,
     pub sigma_one: i32,
     pub sigma_two: i32,
@@ -40,6 +41,7 @@ impl AsciiApp {
         Self {
             picked_path: Some(PathBuf::from("images\\pipe.jpg")),
             orig_img: image::open("images\\pipe.jpg").unwrap(),
+            font: std::env::current_dir().unwrap().join("Bescii-Mono.ttf"),
             toasts: Toasts::default().with_anchor(BottomRight),
             sigma_one: 7,
             sigma_two: 20,
@@ -109,7 +111,7 @@ impl AsciiApp {
     
     fn gen_ascii(&mut self) {
         if self.changed || self.ascii_img.is_none() {
-            let ascii = filters::ascii::to_ascii_image(&self.orig_img.clone(), self.get_scale_factor() as u32, &self.edges.clone().unwrap(), &self.charset, self.get_upscale_factor(), self.gamma);
+            let ascii = filters::ascii::to_ascii_image(&self.orig_img.clone(), &self.font, self.get_scale_factor() as u32, &self.edges.clone().unwrap(), &self.charset, self.get_upscale_factor(), self.gamma);
             self.ascii_img = Some(DynamicImage::ImageRgb8(ascii));
         }
     }

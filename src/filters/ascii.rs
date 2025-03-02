@@ -1,12 +1,14 @@
 use std::collections::HashMap;
-use ab_glyph::{FontRef, PxScale};
+use std::fs::read;
+use std::path::PathBuf;
+use ab_glyph::{FontArc, FontRef, PxScale};
 use image::{DynamicImage, GenericImageView, ImageBuffer, Pixel, Rgb, RgbImage};
 use image::imageops::FilterType;
 use imageproc::drawing::{draw_text_mut};
 
 // Converts an image to ascii image
 // Requires an image dividable by 8
-pub fn to_ascii_image(img: &DynamicImage, scale_down: u32, edge_vector: &Vec<Vec<usize>>, chars: &Vec<String>, upscale: u32, gamma: f32) -> RgbImage {
+pub fn to_ascii_image(img: &DynamicImage, font_path: &PathBuf, scale_down: u32, edge_vector: &Vec<Vec<usize>>, chars: &Vec<String>, upscale: u32, gamma: f32) -> RgbImage {
     let (w, h) = img.dimensions();
     let base_char_size = 8;
     let down_scaled = img.resize(w/scale_down, h/scale_down, FilterType::Nearest); // Downscale image, to sample from it
@@ -72,7 +74,8 @@ pub fn to_ascii_image(img: &DynamicImage, scale_down: u32, edge_vector: &Vec<Vec
         p.0[0] = (gamma_corrected * (char_len - 1.0)).round() / (char_len - 1.0);
     }
 
-    let font = FontRef::try_from_slice(include_bytes!("../../Bescii-Mono.ttf")).unwrap();
+    let font_data = read(font_path).expect("Failed to read font file");
+    let font = FontArc::try_from_vec(font_data).expect("Failed to load font");
     let scale = PxScale::from(base_char_size as f32);
 
     for j in 0..down_scaled.height() {
