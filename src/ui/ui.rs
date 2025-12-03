@@ -1,8 +1,7 @@
 use eframe::egui;
-use egui::{popup_below_widget, FontId, Id, PopupCloseBehavior, RichText, Vec2};
+use egui::{FontId, Id, RichText, Vec2};
 use std::time::Duration;
-use eframe::emath::TSTransform;
-use image::ImageReader;
+use imageproc::drawing::Canvas;
 use crate::ui;
 use crate::ui::utils;
 
@@ -38,10 +37,16 @@ pub fn bottom_panel(ctx: &egui::Context, app: &mut ui::app::AsciiApp) {
                             .clicked()
                         {
                             if let Some(path) = rfd::FileDialog::new().pick_file() {
-                                if utils::change_image(app.picked_path.clone().unwrap(), app) {
-                                    app.toasts.success("Changed image!").set_duration(Option::from(Duration::from_secs(1)));
+                                let (res, cropped_w, cropped_h) = app.image_config.change_image(path, *app.ui_config.down_scale_factors.last().unwrap());
+                                if res {
+                                    app.toasts.success("Changed image!").duration(Option::from(Duration::from_secs(1)));
+                                    if cropped_w || cropped_h {
+                                        app.toasts.warning("Cropped image!").duration(Option::from(Duration::from_secs(1)));
+                                    }
+                                    app.changed = true;
+                                    app.update_images();
                                 } else {
-                                    app.toasts.error("Could not change the image").set_duration(Option::from(Duration::from_secs(3)));
+                                    app.toasts.error("Could not change the image").duration(Option::from(Duration::from_secs(3)));
                                 }
                             }
                         }
@@ -60,17 +65,19 @@ pub fn bottom_panel(ctx: &egui::Context, app: &mut ui::app::AsciiApp) {
                         let below = egui::AboveOrBelow::Above;
                         let close_on_click_outside = egui::popup::PopupCloseBehavior::IgnoreClicks;
                         egui::popup::popup_above_or_below_widget(ui, popup_id, &response, below, close_on_click_outside, |ui| {
-                            ui.set_min_width(app.charset.len() as f32 * 37.0); 
+                            ui.set_min_width(app.ui_config.charset.len() as f32 * 37.0);
                             ui.set_min_height(150.0);
                             ui.add_space(10.0);
                             ui.label("Chars separated by comma");
                             ui.add_space(20.0);
-                            if ui.add(egui::TextEdit::singleline(&mut app.charset_text).hint_text("Write something here")).lost_focus() {
+                            if ui.add(egui::TextEdit::singleline(&mut app.ui_config.charset_text).hint_text("Write something here")).lost_focus() {
                                 if app.check_charset_correctness() {
-                                    app.charset_text = app.charset.join(", ");
-                                    app.toasts.success("Changed charset!").set_duration(Option::from(Duration::from_secs(1)));
+                                    app.ui_config.charset_text = app.ui_config.charset.join(", ");
+                                    app.changed = true;
+                                    app.update_images();
+                                    app.toasts.success("Changed charset!").duration(Option::from(Duration::from_secs(1)));
                                 } else {
-                                    app.toasts.error("Invalid charset!").set_duration(Option::from(Duration::from_secs(3)));
+                                    app.toasts.error("Invalid charset!").duration(Option::from(Duration::from_secs(3)));
                                 }
                             };
                         });
@@ -85,9 +92,9 @@ pub fn bottom_panel(ctx: &egui::Context, app: &mut ui::app::AsciiApp) {
                         {
                             let res = utils::save_image(app);
                             if res {
-                                app.toasts.success("Saved image!").set_duration(Option::from(Duration::from_secs(1)));
+                                app.toasts.success("Saved image!").duration(Option::from(Duration::from_secs(1)));
                             } else {
-                                app.toasts.error("Could not save the image").set_duration(Option::from(Duration::from_secs(3)));
+                                app.toasts.error("Could not save the image").duration(Option::from(Duration::from_secs(3)));
                             }
                         }
                     });
@@ -99,66 +106,87 @@ pub fn bottom_panel(ctx: &egui::Context, app: &mut ui::app::AsciiApp) {
 pub fn central_panel(ctx: &egui::Context, app: &mut ui::app::AsciiApp) {
     egui::CentralPanel::default().show(ctx, |ui| {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
-            // TODO: Implement this
-            // let (id, rect) = ui.allocate_space(ui.available_size());
-            // let response = ui.interact(rect, id, egui::Sense::click_and_drag());
-            // // Allow dragging the background as well.
-            // if response.dragged() {
-            //     app.transform.translation += response.drag_delta();
-            // }
-            // 
-            // // Plot-like reset
-            // if response.double_clicked() {
-            //     app.transform = TSTransform::default();
-            // }
-            // 
-            // let transform =
-            //     TSTransform::from_translation(ui.min_rect().left_top().to_vec2()) * app.transform;
-            // 
-            // if let Some(pointer) = ui.ctx().input(|i| i.pointer.hover_pos()) {
-            //     // Note: doesn't catch zooming / panning if a button in this PanZoom container is hovered.
-            //     if response.hovered() {
-            //         let pointer_in_layer = transform.inverse() * pointer;
-            //         let zoom_delta = ui.ctx().input(|i| i.zoom_delta());
-            //         let pan_delta = ui.ctx().input(|i| i.smooth_scroll_delta);
-            // 
-            //         // Zoom in on pointer:
-            //         app.transform = app.transform
-            //             * TSTransform::from_translation(pointer_in_layer.to_vec2())
-            //             * TSTransform::from_scaling(zoom_delta)
-            //             * TSTransform::from_translation(-pointer_in_layer.to_vec2());
-            // 
-            //         // Pan:
-            //         app.transform = TSTransform::from_translation(pan_delta) * app.transform;
-            //     }
-            // }
+            let (width, height) = (2. * ui.available_width() / 3., ui.available_height());
             ui.allocate_ui_with_layout(
-                [2. * ui.available_width() / 3., ui.available_height()].into(),
+                [width, height].into(),
                 egui::Layout::top_down(egui::Align::TOP),
                 |ui| {
+
+                    // Check if the downscaled image needs resizing
+                    if app.image_config.downscaled_display_img.width() > width as u32 {
+                        app.image_config.downscaled_display_img = app.image_config.downscaled_display_img.resize(
+                            width as u32,
+                            height as u32,
+                            image::imageops::FilterType::Nearest
+                        );
+                    }
+
                     ui.vertical_centered_justified(|ui| {
-                        let img = match app.image_type {
-                            0 => {&app.orig_img},
-                            1 => {&app.ascii_img.as_ref().unwrap()},
-                            2 => {&app.sobel_img.as_ref().unwrap()},
-                            3 => {&app.gaus_img.as_ref().unwrap()},
-                            _ => {panic!("Invalid image type")},
-                        };
+                    //     let mut img = &app.image_config.downscaled_display_img;
+                    //     let (texture_id, original_size) = {
+                    //         let tex = utils::convert_image_to_texture(img, ui).unwrap();
+                    //         // the "natural" size of the texture in points:
+                    //         let original_size = Vec2::new(img.width() as f32, img.height() as f32);
+                    //         (tex, original_size)
+                    //     };
+                    // 
+                    //     // Compute the rectangle we want to use as our 'canvas' for pan/zoom:
+                    //     let avail = Vec2::new(ui.available_width() * 0.9, ui.available_height() * 0.9);
+                    //     let desired_size = original_size * app.zoom;
+                    //     let size = desired_size.min(avail); // optional clamp to available
+                    // 
+                    //     // Allocate that space with drag-sense:
+                    //     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::drag());
+                    // 
+                    //     // -- PAN: click-drag to move --
+                    //     if response.dragged() {
+                    //         app.pan += response.drag_delta();
+                    //     }
+                    // 
+                    //     // -- ZOOM: mouse wheel centered at cursor --
+                    //     if response.hovered() {
+                    //         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                    //         if scroll.abs() > f32::EPSILON {
+                    //             // adjust this factor to taste:
+                    //             let zoom_factor = (1.0 + scroll * 0.001).clamp(0.1, 10.0);
+                    //             if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                    //                 // image-space point under the cursor before zoom
+                    //                 let image_rel = (mouse_pos - rect.min - app.pan) / app.zoom;
+                    //                 // update zoom
+                    //                 app.zoom *= zoom_factor;
+                    //                 // re-center pan so that the same image point stays under cursor
+                    //                 app.pan = mouse_pos - rect.min - image_rel * app.zoom;
+                    //             }
+                    //         }
+                    //     }
+                    // 
+                    //     // finally, paint the image at rect.min + pan, with size = original_size * zoom
+                    //     let image_rect = egui::Rect::from_min_size(rect.min + app.pan, original_size * app.zoom);
+                    //     let uv_rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)); // Full image UV
+                    //     
+                    //     ui.painter().image(
+                    //         texture_id.id,
+                    //         image_rect,
+                    //         uv_rect,
+                    //         egui::Color32::WHITE
+                    //     );
+                    //     
                         ui
                             .add_sized(
                                 Vec2::new(ui.available_width() * 0.9, ui.available_height() * 0.9),
                                 egui::Image::new(ui::utils::convert_image_to_texture(
-                                    img,
+                                    &app.image_config.downscaled_display_img,
                                     ui,
                                 ).unwrap()).shrink_to_fit(),
                             )
+                    // 
                     });
                     ui.add_space(ui.available_height() * 0.2);
                     let buttons = ["Original", "Ascii", "Sobel", "Gaussian"];
                     ui.columns(6, |cols| {
                         for (i, &button) in buttons.iter().enumerate() {
                             cols[i + 1].vertical_centered(|ui| {
-                                let is_selected = i == app.image_type;
+                                let is_selected = i == app.ui_config.image_type;
                                 let button = egui::Button::new(button)
                                     .min_size(Vec2::from([
                                         ui.available_width() * 0.9,
@@ -170,11 +198,9 @@ pub fn central_panel(ctx: &egui::Context, app: &mut ui::app::AsciiApp) {
                                         egui::Color32::from_rgb(60, 60, 60)
                                     });
                                 
-                                if ui.add(button).clicked() {
-                                    if app.image_type != i {
-                                        app.image_type = i;
-                                        app.update_images(i as u32);
-                                    }
+                                if ui.add(button).clicked() && !is_selected {
+                                    app.ui_config.image_type = i;
+                                    app.update_images();
                                 }
                             });
                         }
@@ -192,27 +218,34 @@ pub fn central_panel(ctx: &egui::Context, app: &mut ui::app::AsciiApp) {
                         ui.add_space(10.0);
                         ui.heading("Parameter Control");
                         ui.add_space(25.0);
-                        ui.add(egui::Slider::new(&mut app.sigma_one, 1..=20).text("Sigma One"));
+                        let mut sliders_changed = false;
+
+                        sliders_changed |= ui.add(egui::Slider::new(&mut app.parameter_config.sigma_one, 1..=20).text("Sigma One")).drag_stopped();
                         ui.add_space(20.0);
-                        ui.add(egui::Slider::new(&mut app.sigma_two, 1..=50).text("Sigma Two"));
+                        sliders_changed |= ui.add(egui::Slider::new(&mut app.parameter_config.sigma_two, 1..=50).text("Sigma Two")).drag_stopped();
                         ui.add_space(20.0);
-                        ui.add(egui::Slider::new(&mut app.threshold, 1..=50).text("Threshold"));
+                        sliders_changed |= ui.add(egui::Slider::new(&mut app.parameter_config.threshold, 1..=50).text("Threshold")).drag_stopped();
                         ui.add_space(20.0);
-                        ui.add(egui::Slider::new(&mut app.edge_threshold, 1..=10).text("Edge Threshold")).on_hover_text("Determines how many pixels are needed to form an edge");
+                        sliders_changed |= ui.add(egui::Slider::new(&mut app.parameter_config.edge_threshold, 1..=10).text("Edge Threshold")).on_hover_text("Determines how many pixels are needed to form an edge").drag_stopped();
                         ui.add_space(20.0);
-                        let _tau_slider = ui.add(egui::Slider::new(&mut app.tau, 0.1..=1.0).text("Tau"));
-                        
-                        ui.add_space(40.0);
-                        ui.add(egui::Slider::new(&mut app.gamma, 0.1..=3.0).text("Gamma"));
+                        sliders_changed |= ui.add(egui::Slider::new(&mut app.parameter_config.tau, 0.1..=1.0).text("Tau")).drag_stopped();
 
                         ui.add_space(40.0);
-                        ui.add(egui::Slider::new(&mut app.scale_factor_id, 0..=(app.scale_factors.len() as i32)-1).text("Scale Down").custom_formatter(|x, _| {
-                            format!("{}", app.scale_factors[x as usize])
-                        }));
+                        sliders_changed |= ui.add(egui::Slider::new(&mut app.parameter_config.gamma, 0.1..=3.0).text("Gamma")).drag_stopped();
+
+                        ui.add_space(40.0);
+                        sliders_changed |= ui.add(egui::Slider::new(&mut app.ui_config.down_scale_factor_id, 0..=(app.ui_config.down_scale_factors.len() as u32)-1).text("Scale Down").custom_formatter(|x, _| {
+                            format!("{}", app.ui_config.down_scale_factors[x as usize])
+                        })).drag_stopped();
                         ui.add_space(20.0);
-                        ui.add(egui::Slider::new(&mut app.up_scale_factor_id, 0..=(app.up_scale_factors.len() as i32)-1).text("Upscale").custom_formatter(|x, _| {
-                            format!("{}", app.up_scale_factors[x as usize])
-                        }));
+                        sliders_changed |= ui.add(egui::Slider::new(&mut app.ui_config.up_scale_factor_id, 0..=(app.ui_config.up_scale_factors.len() as u32)-1).text("Upscale").custom_formatter(|x, _| {
+                            format!("{}", app.ui_config.up_scale_factors[x as usize])
+                        })).drag_stopped();
+
+                        if sliders_changed {
+                            app.changed = true;
+                            app.update_images();
+                        }
                         
                         ui.add_space(ui.available_height()*0.8);
                         if ui.add(egui::Button::new("Apply")
@@ -220,8 +253,8 @@ pub fn central_panel(ctx: &egui::Context, app: &mut ui::app::AsciiApp) {
                             .fill(egui::Color32::from_rgb(60, 60, 60))
                             ).on_hover_text("Apply the changes to the image").clicked() {
                                 app.changed = true;
-                                app.update_images(app.image_type as u32);
-                                app.toasts.success("Applied!").set_duration(Option::from(Duration::from_secs(2)));
+                                app.update_images();
+                                app.toasts.success("Applied!").duration(Option::from(Duration::from_secs(2)));
                             };
                     });
                 },

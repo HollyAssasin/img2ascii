@@ -13,6 +13,12 @@ will be much more defined using edge characters.
 ## Gui
 ![image](https://github.com/user-attachments/assets/5b8b4c51-ef18-4863-aab4-e0a183a7966b)
 
+## Usage
+```bash
+cargo run --release
+```
+
+
 ## TODO
 - [x] Basic functionality
 - [x] Edge detection

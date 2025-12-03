@@ -2,6 +2,7 @@ use eframe::egui;
 
 mod filters;
 mod ui;
+mod image_manager;
 
 fn main() -> eframe::Result {
     let default_width = 1200.0;

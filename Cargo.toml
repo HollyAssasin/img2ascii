@@ -1,14 +1,15 @@
 [package]
 name = "ImageToAscii"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-imageproc = "0.25.0"
+imageproc = { version = "0.25.0", features = ["rayon"] }
+libblur = {version = "0.17.3", features = ["image"]}
 ab_glyph = "0.2.28"
-eframe = "0.31.0"
+eframe = {version="0.31.1", features=["wgpu"] }
 egui = "0.31.0"
 egui_extras = { version = "0.31.0", features = ["image", "file"] }
 egui-notify = "0.19.0"
